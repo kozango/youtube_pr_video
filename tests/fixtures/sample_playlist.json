@@ -1,0 +1,28 @@
+{
+  "kind": "youtube#playlistItemListResponse",
+  "etag": "etag",
+  "items": [
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "etag",
+      "id": "id1",
+      "snippet": {
+        "publishedAt": "2023-01-01T00:00:00Z",
+        "title": "【PR】案件動画タイトル",
+        "description": "これはPR案件の説明欄です。#PR",
+        "tags": ["PR", "案件", "提供"]
+      }
+    },
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "etag",
+      "id": "id2",
+      "snippet": {
+        "publishedAt": "2023-01-02T00:00:00Z",
+        "title": "通常動画タイトル",
+        "description": "通常の動画説明欄です。",
+        "tags": ["日常"]
+      }
+    }
+  ]
+}
