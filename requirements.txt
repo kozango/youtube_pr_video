@@ -3,3 +3,4 @@ youtube-transcript-api>=0.6.2
 pandas>=2.0.0
 loguru
 pytest
+python-dotenv

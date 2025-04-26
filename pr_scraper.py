@@ -11,14 +11,16 @@ from loguru import logger
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from dotenv import load_dotenv
+from dotenv import load_dotenv
 
-PR_REGEX = re.compile(r"(PR|案件|提供|タイアップ|#PR|#提供|sponsored|paid promotion)", re.IGNORECASE)
+PR_REGEX = re.compile(r"(\bPR\b|\b案件\b|\b提供\b|\bタイアップ\b|#PR|#提供|sponsored|paid promotion)", re.IGNORECASE)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="YouTube PR動画抽出＋文字起こしツール")
     parser.add_argument("--channel", required=True, help="YouTubeチャンネルID (UCxxxxxx)")
-    parser.add_argument("--api-key", required=True, help="YouTube Data API v3 キー")
+    parser.add_argument("--api-key", required=False, help="YouTube Data API v3 キー（省略時は.envから取得）")
     parser.add_argument("--max-videos", type=int, default=None, help="取得上限（デバッグ用）")
     parser.add_argument("--output", default="output", help="出力ディレクトリ (既定: ./output)")
     parser.add_argument("--debug", action="store_true", help="ログレベル=DEBUG")
@@ -121,20 +123,27 @@ def exponential_backoff(func, *args, max_retries=5, **kwargs):
 
 
 def main():
+    load_dotenv()
     args = parse_args()
+    # --api-key未指定時は環境変数を参照
+    api_key = args.api_key or os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        logger.error("APIキーが指定されていません (--api-key または .env の YOUTUBE_API_KEY)")
+        sys.exit(1)
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = setup_logger(output_dir, args.debug)
     logger.info(f"ログ: {log_path}")
     try:
-        youtube = build("youtube", "v3", developerKey=args.api_key)
+        youtube = build("youtube", "v3", developerKey=api_key)
         uploads_id = exponential_backoff(get_uploads_playlist_id, youtube, args.channel)
         logger.info(f"uploads プレイリストID: {uploads_id}")
         video_ids = exponential_backoff(get_all_video_ids, youtube, uploads_id, args.max_videos)
         logger.info(f"動画件数: {len(video_ids)}")
         videos = exponential_backoff(batch_get_videos, youtube, video_ids)
         logger.info(f"メタ情報取得: {len(videos)}件")
-        rows = []
+        # まずPR判定だけ先に実施
+        pr_videos = []
         for v in videos:
             snippet = v.get("snippet", {})
             video_id = v["id"]
@@ -142,17 +151,49 @@ def main():
             title = snippet.get("title", "")
             description = snippet.get("description", "")
             is_pr, pr_keyword = is_pr_video(snippet)
-            if not is_pr:
-                continue
-            caption = get_caption(video_id)
+            if is_pr:
+                pr_videos.append({
+                    "video_id": video_id,
+                    "published_at": published_at,
+                    "title": title,
+                    "description": description,
+                    "snippet": snippet,
+                    "pr_keyword_hit": pr_keyword
+                })
+
+        logger.info(f"PR動画件数: {len(pr_videos)}")
+
+        # PR動画だけ字幕取得
+        def extract_sponsor_and_product(description):
+            import re
+            sponsor = ""
+            product = ""
+            # 提供会社
+            sponsor_match = re.search(r'提供[:：]?([\w\u3000-\u9FFF\uFF01-\uFF5E\s]+)', description)
+            if sponsor_match:
+                sponsor = sponsor_match.group(1).strip()
+            # 商品名
+            product_match = re.search(r'(商品名|アイテム名)[:：]?([\w\u3000-\u9FFF\uFF01-\uFF5E\s]+)', description)
+            if product_match:
+                product = product_match.group(2).strip()
+            return sponsor, product
+
+        rows = []
+        for pr in pr_videos:
+            caption = get_caption(pr["video_id"])
+            sponsor, product = extract_sponsor_and_product(pr["description"])
+            video_url = f"https://www.youtube.com/watch?v={pr['video_id']}"
             rows.append({
-                "video_id": video_id,
-                "published_at": published_at,
-                "title": title,
-                "description": description,
+                "video_id": pr["video_id"],
+                "published_at": pr["published_at"],
+                "title": pr["title"],
+                "description": pr["description"],
                 "caption": caption,
                 "is_pr": True,
-                "pr_keyword_hit": pr_keyword
+                "pr_keyword_hit": pr["pr_keyword_hit"],
+                "sponsor": sponsor,
+                "product": product,
+                "video_url": video_url
             })
         df = pd.DataFrame(rows)
         out_path = output_dir / "pr_videos.csv"
